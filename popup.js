@@ -1,3 +1,4 @@
+// 📄 popup.js (Исправлен)
 (() => {
   const adsTab = document.getElementById("ads-tab");
   const appAdsTab = document.getElementById("appads-tab");
@@ -14,6 +15,16 @@
   let appAdsUrl = "";
   let sellersData = [];
   let current = "seller";
+
+  function sendMessageSafe(message, callback = () => {}) {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        // Игнорируем ошибки вроде "No SW"
+        return;
+      }
+      callback(response);
+    });
+  }
 
   async function fetchWithTimeoutAndRetry(url, { timeout = 8000, retries = 1, fetchOptions = {} } = {}) {
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -150,7 +161,7 @@
   }
 
   function updateBadge(count) {
-    chrome.runtime.sendMessage({ type: "setBadge", count }, () => { /* ignore */ });
+    sendMessageSafe({ type: "setBadge", count });
   }
 
   function showCurrent() {
@@ -217,7 +228,7 @@
     appAdsText = appRes.text;
     appAdsUrl = appRes.finalUrl || (origin ? `${origin}/app-ads.txt` : "");
 
-    chrome.runtime.sendMessage({ type: "getSellersCache" }, (response) => {
+    sendMessageSafe({ type: "getSellersCache" }, (response) => {
       try {
         sellersData = Array.isArray(response && response.sellers) ? response.sellers : [];
       } catch {
@@ -226,7 +237,7 @@
       showCurrent();
     });
 
-    chrome.runtime.sendMessage({ type: "refreshSellers" }, () => { /* ignore */ });
+    sendMessageSafe({ type: "refreshSellers" });
   }
 
   filterCheckbox.checked = true;

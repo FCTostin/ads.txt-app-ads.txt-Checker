@@ -78,6 +78,7 @@ function getCachedSellers() {
 function initSettingsFromStorage() {
   chrome.storage.local.get(SETTINGS_KEYS, (res) => {
     sellersUrl = (res && typeof res.sellersUrl === "string" && res.sellersUrl.trim()) ? res.sellersUrl.trim() : DEFAULT_SELLERS_URL;
+    // cacheTtlMin приходит в минутах
     const ttlMin = (res && typeof res.cacheTtlMin === "number") ? res.cacheTtlMin : 60;
     cacheTtlMs = Math.max(1, ttlMin) * 60 * 1000;
     badgeEnabled = (res && typeof res.badgeEnable === "boolean") ? res.badgeEnable : true;
@@ -286,26 +287,23 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // messages: getSellersCache / refreshSellers / optionsUpdated / setBadge / scanResult fallback
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Обязательно возвращаем true, чтобы sendResponse можно было вызвать позже.
+  const isAsync = true;
+  
   (async () => {
-    if (!message || !message.type) { sendResponse({}); return; }
-
-    if (message.type === "getSellersCache") {
+    let response = {};
+    if (!message || !message.type) { 
+      // response = {}; // уже установлено
+    } else if (message.type === "getSellersCache") {
       const cached = await getCachedSellers();
-      // refresh if stale
       if (!cached.ts || (Date.now() - cached.ts) > cacheTtlMs) {
         fetchAndCacheSellers().catch(() => {});
       }
-      sendResponse({ sellers: cached.sellers || [], ts: cached.ts || 0 });
-      return;
-    }
-
-    if (message.type === "refreshSellers") {
+      response = { sellers: cached.sellers || [], ts: cached.ts || 0 };
+    } else if (message.type === "refreshSellers") {
       const sellers = await fetchAndCacheSellers(true).catch(() => null);
-      if (sellers) sendResponse({ ok: true, sellers }); else sendResponse({ ok: false });
-      return;
-    }
-
-    if (message.type === "optionsUpdated") {
+      if (sellers) response = { ok: true, sellers }; else response = { ok: false };
+    } else if (message.type === "optionsUpdated") {
       if (typeof message.sellersUrl === "string") sellersUrl = message.sellersUrl || DEFAULT_SELLERS_URL;
       if (typeof message.cacheTtlMin === "number") cacheTtlMs = Math.max(1, message.cacheTtlMin) * 60 * 1000;
       if (typeof message.badgeEnable === "boolean") badgeEnabled = message.badgeEnable;
@@ -313,7 +311,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (typeof message.scanTiming === "string") scanTiming = (message.scanTiming === "delayed") ? "delayed" : "immediate";
       if (typeof message.scanDelay === "number") scanDelay = Math.max(0, message.scanDelay);
 
-      // persist
       chrome.storage.local.set({
         sellersUrl,
         cacheTtlMin: Math.round(cacheTtlMs / 60000),
@@ -323,7 +320,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         scanDelay
       }, () => {});
 
-      // if sellersUrl changed, fetch new sellers now
       if (typeof message.sellersUrl === "string") {
         fetchAndCacheSellers().catch(() => {});
       }
@@ -332,22 +328,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         for (const k in countsByTab) if (Object.prototype.hasOwnProperty.call(countsByTab, k)) delete countsByTab[k];
         chrome.action.setBadgeText({ text: "" });
       }
-      sendResponse({ ok: true });
-      return;
-    }
-
-    if (message.type === "setBadge") {
-      if (!badgeEnabled) { chrome.action.setBadgeText({ text: "" }); sendResponse({ ok: true, ignored: true }); return; }
-      const count = Number.isFinite(message.count) ? Math.max(0, message.count) : 0;
-      const text = count > 0 ? String(count) : "";
-      chrome.action.setBadgeText({ text });
-      if (text) chrome.action.setBadgeBackgroundColor({ color: BADGE_BG_COLOR });
-      sendResponse({ ok: true });
-      return;
-    }
-
-    if (message.type === "scanResult") {
-      // fallback from content_script: update countsByTab and badge
+      response = { ok: true };
+    } else if (message.type === "setBadge") {
+      if (!badgeEnabled) { 
+        chrome.action.setBadgeText({ text: "" }); 
+        response = { ok: true, ignored: true };
+      } else {
+        const count = Number.isFinite(message.count) ? Math.max(0, message.count) : 0;
+        const text = count > 0 ? String(count) : "";
+        chrome.action.setBadgeText({ text });
+        if (text) chrome.action.setBadgeBackgroundColor({ color: BADGE_BG_COLOR });
+        response = { ok: true };
+      }
+    } else if (message.type === "scanResult") {
       const tabId = sender && sender.tab && sender.tab.id;
       const count = Number.isFinite(message.count) ? Math.max(0, message.count) : 0;
       if (typeof tabId === "number") {
@@ -356,13 +349,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (tabs && tabs[0] && tabs[0].id === tabId) applyBadgeForTab(tabId);
         });
       }
-      sendResponse({ ok: true });
-      return;
+      response = { ok: true };
     }
 
-    sendResponse({});
-  })();
+    // Один и единственный вызов sendResponse
+    sendResponse(response);
+  })().catch((error) => {
+    // В случае ошибки, выводим только сообщение об ошибке, чтобы избежать ReferenceError
+    // при попытке доступа к глобальным переменным в невалидном контексте.
+    console.error("Async response failed:", error && error.message || "Unknown error");
+    sendResponse({ ok: false, error: error && error.message || "Unknown error" });
+  });
 
   // indicate we'll respond asynchronously
-  return true;
+  return isAsync;
 });
