@@ -75,22 +75,32 @@ function getCachedSellers() {
 }
 
 // ---- settings init ----
-function initSettingsFromStorage() {
-  chrome.storage.local.get(SETTINGS_KEYS, (res) => {
-    sellersUrl = (res && typeof res.sellersUrl === "string" && res.sellersUrl.trim()) ? res.sellersUrl.trim() : DEFAULT_SELLERS_URL;
-    // cacheTtlMin приходит в минутах
-    const ttlMin = (res && typeof res.cacheTtlMin === "number") ? res.cacheTtlMin : 60;
-    cacheTtlMs = Math.max(1, ttlMin) * 60 * 1000;
-    badgeEnabled = (res && typeof res.badgeEnable === "boolean") ? res.badgeEnable : true;
-    scanMode = (res && res.scanMode === "content") ? "content" : "background";
-    scanTiming = (res && res.scanTiming === "delayed") ? "delayed" : "immediate";
-    scanDelay = (res && typeof res.scanDelay === "number") ? Math.max(0, res.scanDelay) : 10;
 
-    if (!badgeEnabled) chrome.action.setBadgeText({ text: "" });
-    console.debug("background init:", { sellersUrl, cacheTtlMs, badgeEnabled, scanMode, scanTiming, scanDelay });
+// Глобальный Promise, который будет разрешен после инициализации настроек.
+let settingsInitialized = null;
+
+function initSettingsFromStorage() {
+  settingsInitialized = new Promise(resolve => {
+    chrome.storage.local.get(SETTINGS_KEYS, (res) => {
+      sellersUrl = (res && typeof res.sellersUrl === "string" && res.sellersUrl.trim()) ? res.sellersUrl.trim() : DEFAULT_SELLERS_URL;
+      // cacheTtlMin приходит в минутах
+      const ttlMin = (res && typeof res.cacheTtlMin === "number") ? res.cacheTtlMin : 60;
+      cacheTtlMs = Math.max(1, ttlMin) * 60 * 1000;
+      badgeEnabled = (res && typeof res.badgeEnable === "boolean") ? res.badgeEnable : true;
+      scanMode = (res && res.scanMode === "content") ? "content" : "background";
+      scanTiming = (res && res.scanTiming === "delayed") ? "delayed" : "immediate";
+      scanDelay = (res && typeof res.scanDelay === "number") ? Math.max(0, res.scanDelay) : 10;
+
+      if (!badgeEnabled) chrome.action.setBadgeText({ text: "" });
+      console.debug("background init:", { sellersUrl, cacheTtlMs, badgeEnabled, scanMode, scanTiming, scanDelay });
+      resolve(); // Разрешаем Promise после успешной инициализации
+    });
   });
 }
+
+// Запускаем инициализацию при старте скрипта
 initSettingsFromStorage();
+
 chrome.storage.onChanged.addListener((changes) => {
   let needInit = false;
   for (const k of SETTINGS_KEYS) if (changes[k]) needInit = true;
@@ -198,6 +208,9 @@ async function executeExtractSellerIds(tabId) {
 }
 
 async function doScanForTab(tabId) {
+  // Добавляем ожидание инициализации настроек
+  await settingsInitialized; 
+  
   if (!badgeEnabled) return null;
   // cooldown
   if (Date.now() - (lastScanAt[tabId] || 0) < SCAN_COOLDOWN_MS) return null;
@@ -210,6 +223,18 @@ async function doScanForTab(tabId) {
   // get seller ids from page
   const pageRes = await executeExtractSellerIds(tabId);
   const pageIds = Array.isArray(pageRes.ids) ? pageRes.ids : [];
+
+  // --- ИСПРАВЛЕНИЕ НЕСТАБИЛЬНОСТИ БЕЙДЖА ---
+  if (!pageRes.ok && pageIds.length === 0) {
+      // Если сканирование страницы провалилось (pageRes.ok=false) или не найдено ID,
+      // мы сбрасываем бейдж для этой вкладки, чтобы не показывать старые/ложные данные.
+      countsByTab[tabId] = 0;
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs[0] && tabs[0].id === tabId) applyBadgeForTab(tabId);
+      });
+      return 0;
+  }
+  // ----------------------------------------
 
   // load cached sellers
   let cached = await getCachedSellers();
@@ -291,12 +316,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const isAsync = true;
   
   (async () => {
+    // ВАЖНО: Ждем, пока Service Worker загрузит все глобальные настройки!
+    await settingsInitialized;
+
+    // После ожидания глобальные переменные (badgeEnabled, cacheTtlMs и т.д.) гарантированно доступны.
+    
     let response = {};
     if (!message || !message.type) { 
       // response = {}; // уже установлено
     } else if (message.type === "getSellersCache") {
       const cached = await getCachedSellers();
-      if (!cached.ts || (Date.now() - cached.ts) > cacheTtlMs) {
+      if (!cached.ts || (Date.now() - cached.ts) > cacheTtlMs) { 
         fetchAndCacheSellers().catch(() => {});
       }
       response = { sellers: cached.sellers || [], ts: cached.ts || 0 };
@@ -330,7 +360,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       response = { ok: true };
     } else if (message.type === "setBadge") {
-      if (!badgeEnabled) { 
+      if (!badgeEnabled) { // Используем глобальную переменную, которая теперь гарантированно инициализирована
         chrome.action.setBadgeText({ text: "" }); 
         response = { ok: true, ignored: true };
       } else {
@@ -355,8 +385,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Один и единственный вызов sendResponse
     sendResponse(response);
   })().catch((error) => {
-    // В случае ошибки, выводим только сообщение об ошибке, чтобы избежать ReferenceError
-    // при попытке доступа к глобальным переменным в невалидном контексте.
+    // В случае ошибки, выводим только сообщение об ошибке.
     console.error("Async response failed:", error && error.message || "Unknown error");
     sendResponse({ ok: false, error: error && error.message || "Unknown error" });
   });
