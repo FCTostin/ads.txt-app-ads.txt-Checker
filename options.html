@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>adWMG Checker — Настройки</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      body { font-family: Arial, sans-serif; padding: 16px; max-width: 720px; }
+      h1 { font-size: 18px; margin-bottom: 8px; }
+      label { display:block; margin:10px 0 4px; font-weight:600; }
+      input[type="text"], input[type="number"], select { width:100%; padding:8px; box-sizing:border-box; }
+      .row { display:flex; gap:8px; align-items:center; }
+      .row > * { flex:1; }
+      button { margin-top:12px; padding:8px 12px; }
+      .status { margin-top:8px; font-size:13px; color:#333; }
+      .hint { font-size:12px; color:#666; margin-top:4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Настройки adWMG Checker</h1>
+
+    <label for="sellersUrl">URL sellers.json</label>
+    <input id="sellersUrl" type="text" placeholder="https://adwmg.com/sellers.json" />
+
+    <label for="cacheTtl">Кэш sellers.json (минут)</label>
+    <input id="cacheTtl" type="number" min="1" value="60" />
+
+    <div style="margin-top:8px;">
+      <label><input id="badgeEnable" type="checkbox" /> Показывать бейдж с количеством совпадений</label>
+      <div class="hint">Если выключено — никакого автосканирования не будет.</div>
+    </div>
+
+    <label for="scanMode">Режим сканирования</label>
+    <select id="scanMode">
+      <option value="background">Background (экономно, скан только из background)</option>
+      <option value="content">Content (скрипт инжектируется в страницу)</option>
+    </select>
+
+    <label for="scanTiming">Когда выполнять скан</label>
+    <select id="scanTiming">
+      <option value="immediate">Сразу после загрузки страницы</option>
+      <option value="delayed">Через N секунд после загрузки</option>
+    </select>
+
+    <label for="scanDelay">Задержка N (секунд) — если выбран Delayed</label>
+    <input id="scanDelay" type="number" min="0" value="10" />
+
+    <div class="row">
+      <button id="saveBtn">Сохранить</button>
+      <button id="resetBtn">Сбросить</button>
+    </div>
+
+    <div class="status" id="status">Загрузка...</div>
+
+    <script src="options.js"></script>
+  </body>
+</html>
